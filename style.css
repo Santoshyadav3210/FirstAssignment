@@ -32,8 +32,8 @@ margin: 2rem 0rem;
 .primary-link{
     background-color:gray;
     border-radius: 0.5rem;
-    color: white;
-    border-color: gray;
+    color:white;
+    border:1px solid white;
 }
 
 .secondary-link{
