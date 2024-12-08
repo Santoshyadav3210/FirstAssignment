@@ -714,3 +714,130 @@ export const WorkstreamCostGrid = (props: any) => {
     </Container>
   );
 };
+------------------------------------------------------------------------------------------------------------------------------------------------
+------------------------------------------------------------------------------------------------------------------------------------------------
+export const WorkstreamCostGrid = (props: any) => {
+  console.log("WorkstreamCostGrid", props);
+  const { t } = useTranslation();
+
+  const [dataType, setDataType] = useState<DateType>("fiscal");
+  const [data, setData] = useState<Array<WorkstreamCostItem>>(props.data ?? []);
+
+  const columnDefs: Array<ColDef<WorkstreamCostItem> | ColGroupDef<WorkstreamCostItem>> = [
+    {
+      headerName: "Fiscal Year Status",
+      field: "fiscalYearStatus",
+      width: 250,
+      editable: true, // Allow editing fiscal year status
+      cellRenderer: (params: ICellRendererParams<any>) => {
+        return params.value ? ` ${params.data?.fiscalYearStatus} - ${params.data?.fiscalYear}` : t("Total");
+      },
+    },
+    {
+      headerName: t("Projected CTB Cost"),
+      children: [
+        {
+          headerName: t("IT"),
+          valueGetter: (params: any) => {
+            return dataType === "cash"
+              ? params.data?.cash.projectedITCashCTB
+              : params.data?.fiscal.projectedITFiscalCTB;
+          },
+          aggFunc: "sum",
+          valueFormatter: GridFormatter.currencyFormatter,
+          editable: true, // Allow editing this cell
+        },
+        {
+          headerName: t("Non-IT"),
+          valueGetter: (params: any) => {
+            return dataType === "cash"
+              ? params.data?.cash.projectedNonITCashCTB
+              : params.data?.fiscal.projectedNonITFiscalCTB;
+          },
+          aggFunc: "sum",
+          valueFormatter: GridFormatter.currencyFormatter,
+          editable: true, // Allow editing this cell
+        },
+      ],
+    },
+    // Repeat similar edits for other columns where required
+  ];
+
+  const onCellValueChanged = (params: any) => {
+    const { data, colDef, newValue } = params;
+    const field = colDef.field;
+
+    console.log("Cell value changed:", {
+      field,
+      oldValue: params.oldValue,
+      newValue,
+    });
+
+    let updatedData = { ...data };
+
+    if (dataType === "cash") {
+      if (field === "projectedITCashCTB") {
+        updatedData.cash.projectedITCashCTB = newValue;
+      } else if (field === "projectedNonITCashCTB") {
+        updatedData.cash.projectedNonITCashCTB = newValue;
+      }
+    } else {
+      if (field === "projectedITFiscalCTB") {
+        updatedData.fiscal.projectedITFiscalCTB = newValue;
+      } else if (field === "projectedNonITFiscalCTB") {
+        updatedData.fiscal.projectedNonITFiscalCTB = newValue;
+      }
+    }
+
+    // Update the specific row in the dataset
+    setData((prevData) =>
+      prevData.map((item) =>
+        item.fiscalYear === updatedData.fiscalYear ? updatedData : item
+      )
+    );
+  };
+
+  const onDataTypeChangeHandler = (e: SelectChangeEvent<DateType>) => {
+    if (props.data) {
+      setDataType(e.target.value as DateType);
+    }
+  };
+
+  return (
+    <Container className="ag-theme-alpine">
+      <div>
+        <Select value={dataType} onChange={onDataTypeChangeHandler} size="small">
+          <MenuItem value="cash">{t("Cash")}</MenuItem>
+          <MenuItem value="fiscal">{t("Fiscal")}</MenuItem>
+        </Select>
+      </div>
+      <div>
+        <NomuraAgGrid
+          rowData={data}
+          columnDefs={columnDefs}
+          rowSelection={"single"}
+          groupHeaderHeight={36}
+          headerHeight={36}
+          pagination
+          groupIncludeFooter
+          groupIncludeTotalFooter
+          onCellEditingStarted={(params) => {
+            console.log("Cell editing started:", params.column.getColId());
+          }}
+          onCellEditingStopped={(params) => {
+            console.log("Cell editing stopped:", params.column.getColId());
+          }}
+          paginationPageSize={4}
+          domLayout="autoHeight"
+          animateRows
+          overlayLoadingTemplate={Constants.loadingTemplate}
+          onCellValueChanged={onCellValueChanged}
+          onCellClicked={(params) => {
+            console.log("Cell clicked:", params.column.getColId());
+          }}
+        />
+      </div>
+    </Container>
+  );
+};
+
