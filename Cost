@@ -1513,4 +1513,21 @@ export const NomuraAgGrid = React.forwardRef((props: NomuraAgGridProps, gridRef:
   );
 });
 A computed property name must be of type 'string', 'number', 'symbol', or 'any'.ts(
+---------------------------------------------------------------------------
+const onCellValueChanged = (event: CellValueChangedEvent) => {
+  const { oldValue, newValue, colDef, data } = event;
+  if (newValue !== oldValue) {
+    const updatedData = gridData.map((row) => 
+      row === data ? { ...row, [colDef.field]: newValue } : row
+    );
+    setGridData(updatedData); // Update the grid data in state
+    if (props.onDataChange) {
+      props.onDataChange(updatedData); // Pass the updated data to the parent component
+    }
+  }
+  if (props.onCellValueChanged) {
+    props.onCellValueChanged(event); // Pass the change to the parent if needed
+  }
+};
+
 
