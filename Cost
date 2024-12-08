@@ -864,4 +864,195 @@ const ParentComponent = () => {
   );
 };
 
+----
+import React, { useCallback, useState, useEffect } from "react";
+import { useTranslation } from "react-i18next";
+import clsx from "clsx";
+
+// materials
+import { AgGridReactProps, AgGridReact } from "ag-grid-react";
+import {
+  SideBarDef,
+  ColDef,
+  ExcelStyle,
+  StatusPanelDef,
+  FirstDataRenderedEvent,
+  GetLocaleTextParams,
+  GetContextMenuItemsParams,
+  MenuItemDef,
+  RowGroupOpenedEvent,
+  IsGroupOpenByDefaultParams,
+  CellValueChangedEvent,
+  CellClickedEvent,
+} from "ag-grid-community";
+
+// core
+import { GridFormatter as formatter } from "core/utilities/grid-formatter";
+import { ExcelExportFormatter } from "core/utilities/excel-export-formatter";
+
+// store
+import { useAppSelector, useAppDispatch } from "store/reduxHooks";
+
+// components
+import { styled } from "@mui/material";
+import { setGridState, AgGridState } from "store/userSpecificLocalSettings";
+import { cloneDeep } from "lodash";
+import { store } from "store/Store";
+import { NomuraAgGridStatusBar } from "./NomuraAgGridStatusBar/NomuraAgGridStatusBar";
+import { CustomLoadingOverlay } from "./CustomLoadingOverlay/CustomLoadingOverlay";
+
+import DateFilterPicker from "../DataGridComponent/DataFilterPicker/DataFilterPicker";
+import { LoaderWrapper } from "components";
+
+export interface NomuraAgGridProps extends AgGridReactProps {
+  reportName?: string;
+  userName?: string;
+  children?: any;
+  showClearFilterButton?: boolean;
+  rootStyleClassNames?: Record<string, any>;
+  thinGridStatusBar?: boolean;
+  disableSideBar?: boolean;
+  containerHeight?: number;
+  useViewportHeight?: boolean;
+  gridName?: string;
+  disableExcelExporting?: boolean;
+  testId?: string;
+  onCellValueChanged?: (params: CellValueChangedEvent) => void;
+  onCellClickedHandler?: (params: CellClickedEvent) => void;
+  onDataChange?: (updatedData: any[]) => void;  // Callback to handle data change
+}
+
+const AgGridRootContainer = styled("div")<ContainerProps>(/* styles as before */);
+
+/**
+ * The NomuraAgGrid component with editable functionality.
+ */
+export const NomuraAgGrid = React.forwardRef((props: NomuraAgGridProps, gridRef: any) => {
+  const { t } = useTranslation();
+  const [gridData, setGridData] = useState<any[]>([]); // State to hold grid data
+
+  const agGridDefaultColDef: ColDef = {
+    floatingFilter: true,
+    filter: "agMultiColumnFilter",
+    resizable: true,
+    sortable: true,
+    editable: true, // Enable editing for all columns by default
+    ...props.defaultColDef,
+  };
+
+  const sideBar: SideBarDef = {
+    // Same as before
+  };
+
+  const gridColumnTypes = {
+    dateColumn: formatter.dateColumnDefaultConfig(),
+    dateTimeColumn: formatter.dateTimeColumnDefaultConfig(),
+    ...props.columnTypes,
+  };
+
+  const defaultExcelStyles: ExcelStyle[] = [
+    ExcelExportFormatter.headerReportStyle(),
+    ExcelExportFormatter.headerRowStyle(),
+    ExcelExportFormatter.dateTypeColumnFormatting(),
+    ExcelExportFormatter.hyperlinkColumnStyle(),
+    ExcelExportFormatter.textColumnStyle(),
+    ExcelExportFormatter.currencyColumnStyle(),
+  ];
+
+  const excelStyles = props.excelStyles ? defaultExcelStyles.concat(props.excelStyles) : defaultExcelStyles;
+
+  const onCellValueChanged = (event: CellValueChangedEvent) => {
+    // Handle cell value change and update data state
+    const { oldValue, newValue, colDef, data } = event;
+    if (newValue !== oldValue) {
+      const updatedData = gridData.map((row) =>
+        row === data ? { ...row, [colDef.field]: newValue } : row
+      );
+      setGridData(updatedData); // Update the grid data in state
+      if (props.onDataChange) {
+        props.onDataChange(updatedData); // Pass the updated data to the parent component
+      }
+    }
+    // Call the parent's handler if provided
+    if (props.onCellValueChanged) {
+      props.onCellValueChanged(event);
+    }
+  };
+
+  // Function to restore saved grid state
+  const restoreSavedState = () => {
+    // Same as before
+  };
+
+  const getGridContextMenuItems = useCallback((params: GetContextMenuItemsParams): (string | MenuItemDef)[] => {
+    // Same as before
+  }, []);
+
+  // Effect to initialize grid data from props.children if available
+  useEffect(() => {
+    if (props.children) {
+      setGridData(props.children);  // Initialize gridData from passed children
+    }
+  }, [props.children]);
+
+  return (
+    <AgGridRootContainer
+      wrapperHeight={props.containerHeight}
+      thinGridStatusBar={props.thinGridStatusBar}
+      useViewportHeight={props.useViewportHeight}
+      data-testid={props.testId}
+    >
+      <div className={clsx("ag-theme-alpine", props.rootStyleClassNames)}>
+        <AgGridReact
+          {...props}
+          pagination
+          paginationAutoPageSize={props.paginationAutoPageSize}
+          animateRows
+          loadingOverlayComponent={"loaderWrapper"}
+          overlayNoRowsTemplate={t("noRows")}
+          columnTypes={gridColumnTypes}
+          defaultColDef={agGridDefaultColDef}
+          getContextMenuItems={getGridContextMenuItems}
+          components={{
+            ...props.components,
+            loaderWrapper: LoaderWrapper,
+            agDateInput: DateFilterPicker,
+            buttonStatusBar: NomuraAgGridStatusBar,
+          }}
+          excelStyles={!props.disableExcelExporting ? excelStyles : undefined}
+          defaultExcelExportParams={
+            !props.disableExcelExporting
+              ? {
+                  ...ExcelExportFormatter.defaultExcelExportParameters(
+                    props?.children,
+                    props.reportName ?? "",
+                    props.userName ?? ""
+                  ),
+                  ...props.defaultExcelExportParams,
+                }
+              : undefined
+          }
+          enableCharts
+          enableRangeSelection
+          sideBar={props.disableSideBar ? undefined : sideBar}
+          statusBar={{ statusPanels: props.statusBar?.statusPanels || [] }}
+          ref={gridRef}
+          onSortChanged={onSaveGridColumnState}
+          onFirstDataRendered={firstDataRenderedHandler}
+          onFilterChanged={filterChangedHandler}
+          onColumnVisible={onSaveGridColumnState}
+          onColumnPinned={onSaveGridColumnState}
+          onColumnResized={onSaveGridColumnState}
+          onDragStopped={onSaveGridColumnState}
+          onColumnValueChanged={onSaveGridColumnState}
+          onColumnPivotChanged={onSaveGridColumnState}
+          onCellValueChanged={onCellValueChanged} // Handle cell value change
+          suppressColumnVirtualisation // Performance optimization for horizontal scroll
+        >
+          {props.children}
+        </AgGridReact>
+      </div>
+    </AgGridRootContainer>
+  );
+});
 
