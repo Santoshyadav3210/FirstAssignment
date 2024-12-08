@@ -840,4 +840,28 @@ export const WorkstreamCostGrid = (props: any) => {
     </Container>
   );
 };
+-----------------------------------------------------------------------------------------------------------------------------
+----------------------------------------------------------------------------------------------------------------------------
+import React, { useState } from "react";
+import { NomuraAgGrid } from "./NomuraAgGrid";
+
+const ParentComponent = () => {
+  const [gridData, setGridData] = useState<any[]>([
+    { id: 1, name: "John", age: 28 },
+    { id: 2, name: "Jane", age: 34 },
+  ]);
+
+  const handleDataChange = (updatedData: any[]) => {
+    setGridData(updatedData);  // Update the state with the modified data
+  };
+
+  return (
+    <NomuraAgGrid
+      gridName="myGrid"
+      onDataChange={handleDataChange}  // Pass the data change handler
+      children={gridData}  // Pass the grid data as children
+    />
+  );
+};
+
 
