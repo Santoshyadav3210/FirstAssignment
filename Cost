@@ -1,1533 +1,343 @@
-//react
-import React, { useCallback } from "react";
-import { useTranslation } from "react-i18next";
-import clsx from "clsx";
-
-//materials
-import { AgGridReactProps, AgGridReact } from "ag-grid-react";
-import {
-  SideBarDef,
-  ColDef,
-  ExcelStyle,
-  StatusPanelDef,
-  FirstDataRenderedEvent,
-  GetLocaleTextParams,
-  GetContextMenuItemsParams,
-  MenuItemDef,
-  RowGroupOpenedEvent,
-  IsGroupOpenByDefaultParams,
-  CellValueChangedEvent,
-  CellClickedEvent,
-} from "ag-grid-community";
-
-//core
-import { GridFormatter as formatter } from "core/utilities/grid-formatter";
-import { ExcelExportFormatter } from "core/utilities/excel-export-formatter";
-
-//store
-import { useAppSelector, useAppDispatch } from "store/reduxHooks";
-
-//components
-// import DateFilterPicker from "../date-filter-picker/DateFilterPicker";
-// import { CustomLoadingOverlay } from "..";
-// import { NomuraAgGridStatusBar } from "../NomuraAgGridStatusBar/NomuraAgGridStatusBar";
-
-import { styled } from "@mui/material";
-import { setGridState, AgGridState } from "store/userSpecificLocalSettings";
-import { cloneDeep } from "lodash";
-import { store } from "store/Store";
-import { NomuraAgGridStatusBar } from "./NomuraAgGridStatusBar/NomuraAgGridStatusBar";
-import { CustomLoadingOverlay } from "./CustomLoadingOverlay/CustomLoadingOverlay";
-
-import DateFilterPicker from "../DataGridComponent/DataFilterPicker/DataFilterPicker";
-import { LoaderWrapper } from "components";
-
-export interface NomuraAgGridProps extends AgGridReactProps {
-  reportName?: string;
-  userName?: string;
-  children?: any;
-  showClearFilterButton?: boolean;
-  /**
-   * Class name to be applied to root div element.
-   * By default ag-theme-alpine is always applied
-   * Any other class name to be applied, should be provided.
-   * If multiple classes are required, use clsx and pass
-   */
-  rootStyleClassNames?: Record<string, any>; //string | null;
-  thinGridStatusBar?: boolean;
-  disableSideBar?: boolean;
-  containerHeight?: number;
-  useViewportHeight?: boolean;
-  gridName?: string;
-  disableExcelExporting?: boolean;
-  testId?: string;
-  onCellValueChanged?: (params: CellValueChangedEvent) => void;
-  onCellClickedHandler?: (params: CellClickedEvent) => void;
-}
-
-type ContainerProps = {
-  wrapperHeight?: number;
-  thinGridStatusBar?: boolean;
-  useViewportHeight?: boolean;
-};
-
-type GridExtendSettings = Array<string>;
-
-type StringOrNull = string | null | undefined;
-
-const AgGridRootContainer = styled("div")<ContainerProps>(
-  ({ wrapperHeight, thinGridStatusBar, useViewportHeight }) => ({
-    height: "100% !important",
-    display: "grid",
-    gridTemplateRows: "1fr",
-    "& .ag-status-bar": {
-      position: "absolute",
-      bottom: 2,
-      border: "none",
-    },
-    "& .ag-layout-auto-height": {
-      height: "100% !important",
-    },
-    "& .ag-status-panel": {
-      padding: "0 !important",
-      display: "flex",
-      alignItems: "center",
-      marginRight: "18px !important",
-    },
-    "& .ag-paging-page-summary-panel": {
-      margin: "1px !important",
-    },
-    "& .ag-root-wrapper": {
-      height: wrapperHeight ? `${wrapperHeight}${useViewportHeight ? "vh" : "%"} !important` : "100% !important",
-    },
-    ...(thinGridStatusBar && {
-      "& .ag-row": {
-        fontSize: "12px !important",
-        "& .MuiButtonBase-root": {
-          margin: 0,
-          padding: "6px !important",
-        },
-        "& .material-icons": {
-          fontSize: "1rem !important",
-          marginBottom: "5px !important",
-        },
-      },
-      "& .ag-paging-panel": {
-        height: "32px !important",
-      },
-      "& .ag-theme-alpine .ag-status-bar": {
-        borderTop: "none",
-        height: "32px !important",
-      },
-      "& .MuiButtonBase-root": {
-        padding: "8px !important",
-      },
-    }),
-  })
-);
-
-/**
- * This grid defines all the common configurations like excel export, filters, sidebar, default col def, col types.
- * Consumer grid don"t need to specify these configurations however same configurations can be overridden or additional configuration can be added via normal ag grid props.
- * The specific properties and events should be handled by consumer grid like providing data, handling click or grid ready events etc.
- * @param props Ag grid properties which are not specified in parent grid.
- *
- */
-export const NomuraAgGrid = React.forwardRef((props: NomuraAgGridProps, gridRef: any) => {
-  const { t } = useTranslation();
-  const agGridDefaultColDef: ColDef = {
-    floatingFilter: true,
-    filter: "agMultiColumnFilter",
-    resizable: true,
-    sortable: true,
-    // editable: true,
-    ...props.defaultColDef,
-  };
-
-  const onCellValueChangedHandler = (params: CellValueChangedEvent) => {
-    console.log("Cell value changed:", params.newValue);
-    console.log("Old value:", params.oldValue);
-    console.log("Column:", params.column.getColId());
-    console.log("Row data:", params.data);
-
-    // Call the prop function if provided
-    if (props.onCellValueChanged) {
-      props.onCellValueChanged(params);
-    }
-  };
-
-  const onCellClickedHandler = (params: CellClickedEvent) => {
-    console.log("Cell clicked:", params.column.getColId());
-    // console.log('Is cell editable:', params.column.isEditable());
-  };
-
-  const sideBar: SideBarDef = {
-    toolPanels: [
-      {
-        id: "columns",
-        labelDefault: "Columns",
-        labelKey: "columns",
-        iconKey: "columns",
-        toolPanel: "agColumnsToolPanel",
-        minWidth: 225,
-        maxWidth: 225,
-        width: 225,
-      },
-      {
-        id: "filters",
-        labelDefault: "Filters",
-        labelKey: "filters",
-        iconKey: "filter",
-        toolPanel: "agFiltersToolPanel",
-        minWidth: 180,
-        maxWidth: 400,
-        width: 250,
-      },
-    ],
-  };
-
-  const gridColumnTypes = {
-    dateColumn: formatter.dateColumnDefaultConfig(),
-    dateTimeColumn: formatter.dateTimeColumnDefaultConfig(),
-    ...props.columnTypes,
-  };
-
-  const defaultExcelStyles: ExcelStyle[] = [
-    ExcelExportFormatter.headerReportStyle(),
-    ExcelExportFormatter.headerRowStyle(),
-    ExcelExportFormatter.dateTypeColumnFormatting(),
-    ExcelExportFormatter.hyperlinkColumnStyle(),
-    ExcelExportFormatter.textColumnStyle(),
-    ExcelExportFormatter.currencyColumnStyle(),
-  ];
-
-  const excelStyles = props.excelStyles ? defaultExcelStyles.concat(props.excelStyles) : defaultExcelStyles;
-
-  const excelExportProcessCellCallBackHandler = (params: any) => {
-    if (props.defaultExcelExportParams?.processCellCallback) {
-      return props.defaultExcelExportParams.processCellCallback(params);
-    }
-
-    return null;
-  };
-
-  const resetColumnOrderHandler = () => {
-    if (gridRef && gridRef.current) {
-      gridRef.current.columnApi.resetColumnState();
-    }
-  };
-
-  const defaultStatusPanels: StatusPanelDef[] = [
-    {
-      statusPanel: "buttonStatusBar",
-      statusPanelParams: {
-        onExcelExportProcessCellCallBack: !props.disableExcelExporting
-          ? excelExportProcessCellCallBackHandler
-          : undefined,
-        showClearFilterButton: props.showClearFilterButton ?? true,
-        hideExcelExportButton: props.disableExcelExporting ? true : false,
-        handleResetColumnOrder: resetColumnOrderHandler,
-      },
-    },
-    { statusPanel: "agTotalRowCountComponent", align: "right" },
-  ];
-
-  const statusPanels: StatusPanelDef[] = props.statusBar?.statusPanels
-    ? [...defaultStatusPanels, ...props.statusBar.statusPanels]
-    : defaultStatusPanels;
-
-  const currentUser = useAppSelector((state) => state.loggedInUser.currentUser);
-  const dispatch = useAppDispatch();
-
-  const onSaveGridColumnState = () => {
-    if (!props.gridName) {
-      return;
-    }
-    if (gridRef && gridRef.current && gridRef.current && gridRef.current.columnApi) {
-      //This is done to avoid re-render of grid on dispatching action.
-      //Re-rendering is causing saving columns state unstable.
-      const prevState = cloneDeep(store.getState().userSpecificLocalState.agGridStates);
-
-      const prevGridState = prevState.find((state: AgGridState) => state.gridName === props.gridName);
-
-      const colState = gridRef.current.columnApi.getColumnState();
-      const colGroupState = gridRef.current.columnApi.getColumnGroupState();
-      if (prevGridState) {
-        prevGridState.columnState = colState;
-        prevGridState.columnGroupState = colGroupState;
-      } else {
-        prevState.push({ columnState: colState, columnGroupState: colGroupState, gridName: props.gridName });
-      }
-
-      dispatch(setGridState(prevState));
-    }
-  };
-
-  const firstDataRenderedHandler = (event: FirstDataRenderedEvent) => {
-    if (props.onFirstDataRendered) {
-      props.onFirstDataRendered(event);
-    }
-    if (!props.gridName) {
-      return;
-    }
-
-    restoreSavedState();
-  };
-
-  const restoreSavedState = () => {
-    if (gridRef && gridRef.current && gridRef.current) {
-      //This is done to avoid re-render of grid on dispatching action.
-      //Re-rendering is causing saving columns state unstable.
-      const agGridState = store.getState().userSpecificLocalState.agGridStates;
-      const savedState = agGridState.find((state: AgGridState) => state.gridName === props.gridName);
-      if (savedState) {
-        if (gridRef.current.columnApi) {
-          gridRef.current.columnApi.applyColumnState({
-            state: savedState.columnState,
-            applyOrder: true,
-          });
-          if (savedState.columnGroupState) {
-            gridRef.current.columnApi.setColumnGroupState(savedState.columnGroupState);
-          }
-        }
-        if (gridRef.current.api) {
-          if (savedState.filterModel) {
-            gridRef.current.api.setFilterModel(savedState.filterModel);
-          }
-        }
-      }
-    }
-  };
-
-  const filterChangedHandler = (params: any) => {
-    if (props.onFilterChanged) {
-      props.onFilterChanged(params);
-    }
-    if (!props.gridName) {
-      return;
-    }
-    //This is done to avoid re-render of grid on dispatching action.
-    //Re-rendering is causing saving columns state unstable.
-    const agGridState = store.getState().userSpecificLocalState.agGridStates;
-    const filterModel = params.api.getFilterModel();
-    const prevState = cloneDeep(agGridState);
-    const prevGridState = prevState.find((state: any) => state.gridName === props.gridName);
-    if (prevGridState) {
-      prevGridState.filterModel = filterModel;
-    } else {
-      prevState.push({ filterModel: filterModel, gridName: props.gridName });
-    }
-
-    dispatch(setGridState(prevState));
-  };
-
-  const getLocaleText = (params: GetLocaleTextParams) => {
-    if (params.key === "totalRows") {
-      return t("rows");
-    }
-    return params.defaultValue;
-  };
-
-  const getGridContextMenuItems = useCallback((params: GetContextMenuItemsParams): (string | MenuItemDef)[] => {
-    if (props.getContextMenuItems) {
-      return props.getContextMenuItems(params);
-    } else {
-      let result: (string | MenuItemDef)[] = [];
-      if (props.disableExcelExporting) {
-        if (params.defaultItems) {
-          result = params.defaultItems.filter((item) => !item.toLowerCase().includes("export"));
-        }
-      } else {
-        if (params.defaultItems) {
-          result = [...params.defaultItems];
-        }
-      }
-      return result;
-    }
-  }, []);
-
-  return (
-    <AgGridRootContainer
-      wrapperHeight={props.containerHeight}
-      thinGridStatusBar={props.thinGridStatusBar}
-      useViewportHeight={props.useViewportHeight}
-      data-testid={props.testId}
-    >
-      <div className={clsx("ag-theme-alpine", props.rootStyleClassNames)}>
-        <AgGridReact
-          {...props}
-          pagination
-          paginationAutoPageSize={props.paginationAutoPageSize}
-          animateRows
-          loadingOverlayComponent={"loaderWrapper"}
-          overlayNoRowsTemplate={t("noRows")}
-          columnTypes={gridColumnTypes}
-          defaultColDef={agGridDefaultColDef}
-          onCellClicked={onCellClickedHandler}
-          getContextMenuItems={getGridContextMenuItems}
-          onCellValueChanged={onCellValueChangedHandler}
-          components={{
-            ...props.components,
-            loaderWrapper: LoaderWrapper,
-            agDateInput: DateFilterPicker,
-            buttonStatusBar: NomuraAgGridStatusBar,
-          }}
-          excelStyles={!props.disableExcelExporting ? excelStyles : undefined}
-          defaultExcelExportParams={
-            !props.disableExcelExporting
-              ? {
-                  ...ExcelExportFormatter.defaultExcelExportParameters(
-                    props?.children,
-                    props.reportName ?? "",
-                    currentUser.name
-                  ),
-                  ...props.defaultExcelExportParams,
-                }
-              : undefined
-          }
-          enableCharts
-          enableRangeSelection
-          sideBar={props.disableSideBar ? undefined : sideBar}
-          statusBar={{ statusPanels: statusPanels }}
-          ref={gridRef}
-          onSortChanged={onSaveGridColumnState}
-          onFirstDataRendered={firstDataRenderedHandler}
-          onFilterChanged={filterChangedHandler}
-          onColumnVisible={onSaveGridColumnState}
-          onColumnPinned={onSaveGridColumnState}
-          onColumnResized={onSaveGridColumnState}
-          onDragStopped={onSaveGridColumnState}
-          onColumnValueChanged={onSaveGridColumnState}
-          onColumnPivotChanged={onSaveGridColumnState}
-          onCellEditingStarted={(event) => {
-            console.log("Cell editing started", event);
-            // Your custom logic here
-          }}
-          onCellEditingStopped={(event) => {
-            console.log("Cell editing stopped", event);
-            // Your custom logic here
-          }}
-          isGroupOpenByDefault={(e: IsGroupOpenByDefaultParams) => {
-            if (props.gridName) {
-              const gridExtendSettingsJson: StringOrNull = sessionStorage.getItem(props.gridName);
-              const array: GridExtendSettings = gridExtendSettingsJson ? JSON.parse(gridExtendSettingsJson) : [];
-              const key = array.find((x) => x === e.key);
-              return key !== undefined;
-            }
-
-            return false;
-          }}
-          onRowGroupOpened={(e: RowGroupOpenedEvent) => {
-            if (props.gridName) {
-              const key: StringOrNull = e.node.key;
-              const gridExtendSettingsJson: StringOrNull = sessionStorage.getItem(props.gridName);
-              const array: GridExtendSettings = gridExtendSettingsJson ? JSON.parse(gridExtendSettingsJson) : [];
-              const index: number = array.findIndex((x) => x === key);
-              if (e.expanded) {
-                if (index === -1) {
-                  array.push(key as string);
-                }
-              } else {
-                array.splice(index, 1);
-              }
-              sessionStorage.setItem(props.gridName, JSON.stringify(array));
-            }
-          }}
-          getLocaleText={getLocaleText}
-          suppressColumnVirtualisation // Performance optimization for horizontal scroll
-        >
-          {props.children}
-        </AgGridReact>
-      </div>
-    </AgGridRootContainer>
-  );
-});
------------------------------------------------
+import React, { useState, SyntheticEvent, useEffect } from "react";
+import { useDispatch } from "react-redux";
+import { FormState, Resolver, SubmitHandler, useForm } from "react-hook-form";
 import { useTranslation } from "react-i18next";
 
 //mui
-import { Grid, MenuItem, Select, SelectChangeEvent, styled } from "@mui/material";
+import { Box, CircularProgress, Grid, Tab, Tabs, styled } from "@mui/material";
+import { Cancel, Save } from "@mui/icons-material";
 
-//ag-grid-
-import { CellClickedEvent, ColDef, ColGroupDef, ICellRendererParams } from "ag-grid-community";
+//services
 
-//core
-import { Constants, GridFormatter } from "core/utilities";
-import "@ag-grid-community/styles/ag-grid.css";
-import "@ag-grid-community/styles/ag-theme-alpine.css";
+import { showMessage } from "store/ActionMessageSlice";
+import { useAppSelector } from "store/reduxHooks";
 
 //components
-// import { NomuraAgGrid } from "components/common";
+// import { NomuraBigSizeDialog, TabPanel } from "components/common";
+// import { KeyInformation, WorkstreamCostGrid, WorkstreamBenefits, DefendCategorization } from "..";
+// import { workstreamResolver } from "../KeyInformation/WorkstreamValidationRules";
+// import { NomuraButton } from "components/common/forms";
+import { workstreamResolver } from "components/WorkStream/KeyInformation/WorkStreamValidationRules";
+import { NomuraBigSizeDialog } from "components/common/NomuraBigSizeDialog/NomuraBigSizeDialog";
+import { TabWithErrorMark } from "components/common/Tabs/TabWithErrorMark";
+import { TabPanel } from "components/common/TabPanel/TabPanel";
+import { KeyInformation } from "components/WorkStream/KeyInformation/KeyInformation";
+import { WorkstreamCostGrid } from "components/WorkStream/WorkstreamCostGrid/WorkstreamCostGrid";
+import { WorkstreamBenefits } from "components/WorkStream/WorkstreamBenefits/WorkstreamBenefits";
+import { DefendCategorization } from "components/WorkStream/DefendCategorization/DefendCategorization";
+import { NomuraButton } from "components/common/Form";
 
 //models
-import { WorkstreamCost, WorkstreamCostItem } from "models/workstreams";
-import { useState } from "react";
-import { NomuraAgGrid } from "components/common/DataGridComponent/NomuraAgGrid";
+// import { RefDataBudAttribMaster, SelectItem, WorkStream } from "models";
+import { WorkstreamDetails, WorkstreamEdit, WorkstreamInformation, WorkstreamDataCollection } from "models/workstreams";
+import { AttribMasterConstants } from "core/utilities/AttribMasterConstants";
+import { Constants } from "core";
+import { nameof } from "ts-simple-nameof";
+import { SelectItem, WorkStream } from "models";
 
-interface WorkstreamCostGridProps {
-  data: WorkstreamCost;
+import { RefDataBudAttribMaster } from "models/RefernceData/RefdataBudAttribMaster";
+import { BusinessDivisionService, ProgramService, SubProgramService, WorkStreamService } from "services";
+import { JobFunctionMappingService, RegionMappingService } from "services/mappings.service";
+import axios from "axios";
+// import { TabWithErrorMark } from "components/common/Tabs";
+
+interface ViewWorkstreamDialogProps {
+  data: WorkStream;
+  show: boolean;
+  onCancelClick: () => void;
 }
 
-type DateType = "cash" | "fiscal";
+enum ViewWorkstreamType {
+  keyInformation = 0,
+  cost = 1,
+  benefit = 2,
+  defendCategorization = 3,
+}
 
-const Container = styled("div")({
-  display: "grid",
-  gridTemplateRows: "auto 1fr",
-  paddingTop: 16,
-  gridGap: 20,
-  height: 480,
+enum DataType {
+  Workstream = 0,
+  Programs = 1,
+  SubProgram = 2,
+  LeadRegion = 3,
+  DeliveryFunction = 4,
+  BudAttributeMasterData = 5,
+  // Tags = 6,
+}
+
+const LookupTypeKeys: string[] = [
+  AttribMasterConstants.lookupTypeTypeApprovalStatus,
+  AttribMasterConstants.lookupTypeTypeStatus,
+  AttribMasterConstants.lookupTypeTypePriority,
+  AttribMasterConstants.lookupTypeInvGovernanceRegion,
+  AttribMasterConstants.lookupTypeCrossInitiativeFuncs,
+  AttribMasterConstants.lookupTypeInvSpendUsers,
+  AttribMasterConstants.lookupTypeClassification,
+  AttribMasterConstants.lookupTypeSubClassification,
+];
+
+const Loading = styled("div")({
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  height: 454,
 });
 
-export const WorkstreamCostGrid = (props: any) => {
-  console.log("WorkstreamCostGrid", props);
+export const ViewWorkstreamDialog = (props: ViewWorkstreamDialogProps) => {
   const { t } = useTranslation();
-
-  const [dataType, setDataType] = useState<DateType>("fiscal");
-  const [data, setData] = useState<Array<WorkstreamCostItem>>(props.data ?? []);
-
-  const columnDefs: Array<ColDef<WorkstreamCostItem> | ColGroupDef<WorkstreamCostItem>> = [
-    {
-      headerName: "Fiscal Year Status",
-      field: "fiscalYearStatus",
-      width: 250,
-      cellRenderer: (params: ICellRendererParams<any>) => {
-        return params.value ? ` ${params.data?.fiscalYearStatus} - ${params.data?.fiscalYear}` : t("Total");
-      },
-    },
-    {
-      headerName: t("Projected CTB Cost"),
-      children: [
-        {
-          headerName: t("IT"),
-          valueGetter: (params: any) => {
-            return dataType === "cash"
-              ? params.data?.cash.projectedITCashCTB
-              : params.data?.fiscal.projectedITFiscalCTB;
-          },
-          aggFunc: "sum",
-          valueFormatter: GridFormatter.currencyFormatter,
-          editable: (params) => {
-            return (
-              params.data?.fiscalYearStatus === "CURRENT FISCAL YEAR" ||
-              params.data?.fiscalYearStatus === "NEXT FISCAL YEAR"
-            );
-          },
-        },
-        {
-          headerName: t("Non-IT"),
-          valueGetter: (params: any) => {
-            return dataType === "cash"
-              ? params.data?.cash.projectedNonITCashCTB
-              : params.data?.fiscal.projectedNonITFiscalCTB;
-          },
-          aggFunc: "sum",
-          valueFormatter: GridFormatter.currencyFormatter,
-          editable: (params) => {
-            return (
-              params.data?.fiscalYearStatus === "CURRENT FISCAL YEAR" ||
-              params.data?.fiscalYearStatus === "NEXT FISCAL YEAR"
-            );
-          },
-        },
-      ],
-    },
-    {
-      headerName: t("Budgeted CTB Cost"),
-      children: [
-        {
-          headerName: t("IT"),
-          valueGetter: (params: any) => {
-            return dataType === "cash" ? params.data?.cash.budgetedITCashCTB : params.data?.fiscal.budgetedITFiscalCTB;
-          },
-          aggFunc: "sum",
-          valueFormatter: GridFormatter.currencyFormatter,
-        },
-        {
-          headerName: t("Non-IT"),
-          valueGetter: (params: any) => {
-            return dataType === "cash"
-              ? params.data?.cash.budgetedNonITCashCTB
-              : params.data?.fiscal.budgetedNonITFiscalCTB;
-          },
-          aggFunc: "sum",
-          valueFormatter: GridFormatter.currencyFormatter,
-        },
-      ],
-    },
-    {
-      headerName: t("Forecast CTB Cost"),
-      children: [
-        {
-          headerName: t("IT"),
-          valueGetter: (params: any) => {
-            return dataType === "cash" ? params.data?.cash.forecastITCashCTB : params.data?.fiscal.forecastITFiscalCTB;
-          },
-          aggFunc: "sum",
-          valueFormatter: GridFormatter.currencyFormatter,
-        },
-        {
-          headerName: t("Non IT"),
-          valueGetter: (params: any) => {
-            return dataType === "cash"
-              ? params.data?.cash.forecastNonITCashCTB
-              : params.data?.fiscal.forecastNonITFiscalCTB;
-          },
-          aggFunc: "sum",
-          valueFormatter: GridFormatter.currencyFormatter,
-        },
-      ],
-    },
-    {
-      headerName: t("Actual CTB Cost"),
-      children: [
-        {
-          headerName: t("IT"),
-          valueGetter: (params: any) => {
-            return dataType === "cash" ? params.data?.cash.actualITCashCTB : params.data?.fiscal.actualITFiscalCTB;
-          },
-          aggFunc: "sum",
-          valueFormatter: GridFormatter.currencyFormatter,
-        },
-        {
-          headerName: t("Non IT"),
-          valueGetter: (params: any) => {
-            return dataType === "cash"
-              ? params.data?.cash.actualNonITCashCTB
-              : params.data?.fiscal.actualNonITFiscalCTB;
-          },
-          aggFunc: "sum",
-          valueFormatter: GridFormatter.currencyFormatter,
-        },
-      ],
-    },
-    {
-      headerName: t("Projected RTB Cost"),
-      children: [
-        {
-          headerName: t("IT"),
-          valueGetter: (params: any) => {
-            return dataType === "cash"
-              ? params.data?.cash.projectedITCashRTB
-              : params.data?.fiscal.projectedITFiscalRTB;
-          },
-          aggFunc: "sum",
-          valueFormatter: GridFormatter.currencyFormatter,
-          editable: (params) => {
-            return (
-              params.data?.fiscalYearStatus === "CURRENT FISCAL YEAR" ||
-              params.data?.fiscalYearStatus === "NEXT FISCAL YEAR"
-            );
-          },
-        },
-        {
-          headerName: t("Non IT"),
-          valueGetter: (params: any) => {
-            return dataType === "cash"
-              ? params.data?.cash.projectedNonITCashRTB
-              : params.data?.fiscal.projectedNonITFiscalRTB;
-          },
-          aggFunc: "sum",
-          valueFormatter: GridFormatter.currencyFormatter,
-          editable: (params) => {
-            return (
-              params.data?.fiscalYearStatus === "CURRENT FISCAL YEAR" ||
-              params.data?.fiscalYearStatus === "NEXT FISCAL YEAR"
-            );
-          },
-        },
-      ],
-    },
-  ];
-  const onCellValueChanged = (params: any) => {
-    const { data, colDef, newValue } = params;
-    const field = colDef.field;
-
-    let updatedData = { ...data };
-
-    if (dataType === "cash") {
-      if (field === "projectedITCashCTB") {
-        updatedData.cash.projectedITCashCTB = newValue;
-      } else if (field === "projectedNonITCashCTB") {
-        updatedData.cash.projectedNonITCashCTB = newValue;
-      } else if (field === "projectedITCashRTB") {
-        updatedData.cash.projectedITCashRTB = newValue;
-      } else if (field === "projectedNonITCashRTB") {
-        updatedData.cash.projectedNonITCashRTB = newValue;
-      }
-    } else {
-      if (field === "projectedITFiscalCTB") {
-        updatedData.fiscal.projectedITFiscalCTB = newValue;
-      } else if (field === "projectedNonITFiscalCTB") {
-        updatedData.fiscal.projectedNonITFiscalCTB = newValue;
-      } else if (field === "projectedITFiscalRTB") {
-        updatedData.fiscal.projectedITFiscalRTB = newValue;
-      } else if (field === "projectedNonITFiscalRTB") {
-        updatedData.fiscal.projectedNonITFiscalRTB = newValue;
-      }
-    }
-
-    // Update the specific row in the dataset
-    setData((prevData) => prevData.map((item) => (item.fiscalYear === updatedData.fiscalYear ? updatedData : item)));
-  };
-
-  const onDataTypeChangeHandler = (e: SelectChangeEvent<DateType>) => {
-    if (props.data) {
-      setDataType(e.target.value as DateType);
-    }
-  };
-
-  return (
-    <Container className="ag-theme-alpine">
-      <div>
-        <Select value={dataType} onChange={onDataTypeChangeHandler} size="small">
-          <MenuItem value="cash">{t("Cash")}</MenuItem>
-          <MenuItem value="fiscal">{t("Fiscal")}</MenuItem>
-        </Select>
-      </div>
-      <div>
-        <NomuraAgGrid
-          rowData={data}
-          columnDefs={columnDefs}
-          rowSelection={"single"}
-          groupHeaderHeight={36}
-          headerHeight={36}
-          pagination
-          groupIncludeFooter
-          groupIncludeTotalFooter
-          onCellEditingStarted={(params) => {
-            console.log("Cell editing started:", params.column.getColId());
-          }}
-          onCellEditingStopped={(params) => {
-            console.log("Cell editing stopped:", params.column.getColId());
-          }}
-          paginationPageSize={4}
-          domLayout="autoHeight"
-          animateRows
-          overlayLoadingTemplate={Constants.loadingTemplate}
-          onCellValueChanged={onCellValueChanged}
-          onCellClicked={(params) => {
-            console.log("Cell value changed in parent component:", params.column.getColId());
-            // You can perform additional actions here if needed
-          }}
-        />
-      </div>
-    </Container>
-  );
-};
-------------------------------------------------------------------------------------------------------------------------------------------------
-------------------------------------------------------------------------------------------------------------------------------------------------
-export const WorkstreamCostGrid = (props: any) => {
-  console.log("WorkstreamCostGrid", props);
-  const { t } = useTranslation();
-
-  const [dataType, setDataType] = useState<DateType>("fiscal");
-  const [data, setData] = useState<Array<WorkstreamCostItem>>(props.data ?? []);
-
-  const columnDefs: Array<ColDef<WorkstreamCostItem> | ColGroupDef<WorkstreamCostItem>> = [
-    {
-      headerName: "Fiscal Year Status",
-      field: "fiscalYearStatus",
-      width: 250,
-      editable: true, // Allow editing fiscal year status
-      cellRenderer: (params: ICellRendererParams<any>) => {
-        return params.value ? ` ${params.data?.fiscalYearStatus} - ${params.data?.fiscalYear}` : t("Total");
-      },
-    },
-    {
-      headerName: t("Projected CTB Cost"),
-      children: [
-        {
-          headerName: t("IT"),
-          valueGetter: (params: any) => {
-            return dataType === "cash"
-              ? params.data?.cash.projectedITCashCTB
-              : params.data?.fiscal.projectedITFiscalCTB;
-          },
-          aggFunc: "sum",
-          valueFormatter: GridFormatter.currencyFormatter,
-          editable: true, // Allow editing this cell
-        },
-        {
-          headerName: t("Non-IT"),
-          valueGetter: (params: any) => {
-            return dataType === "cash"
-              ? params.data?.cash.projectedNonITCashCTB
-              : params.data?.fiscal.projectedNonITFiscalCTB;
-          },
-          aggFunc: "sum",
-          valueFormatter: GridFormatter.currencyFormatter,
-          editable: true, // Allow editing this cell
-        },
-      ],
-    },
-    // Repeat similar edits for other columns where required
-  ];
-
-  const onCellValueChanged = (params: any) => {
-    const { data, colDef, newValue } = params;
-    const field = colDef.field;
-
-    console.log("Cell value changed:", {
-      field,
-      oldValue: params.oldValue,
-      newValue,
-    });
-
-    let updatedData = { ...data };
-
-    if (dataType === "cash") {
-      if (field === "projectedITCashCTB") {
-        updatedData.cash.projectedITCashCTB = newValue;
-      } else if (field === "projectedNonITCashCTB") {
-        updatedData.cash.projectedNonITCashCTB = newValue;
-      }
-    } else {
-      if (field === "projectedITFiscalCTB") {
-        updatedData.fiscal.projectedITFiscalCTB = newValue;
-      } else if (field === "projectedNonITFiscalCTB") {
-        updatedData.fiscal.projectedNonITFiscalCTB = newValue;
-      }
-    }
-
-    // Update the specific row in the dataset
-    setData((prevData) =>
-      prevData.map((item) =>
-        item.fiscalYear === updatedData.fiscalYear ? updatedData : item
-      )
-    );
-  };
-
-  const onDataTypeChangeHandler = (e: SelectChangeEvent<DateType>) => {
-    if (props.data) {
-      setDataType(e.target.value as DateType);
-    }
-  };
-
-  return (
-    <Container className="ag-theme-alpine">
-      <div>
-        <Select value={dataType} onChange={onDataTypeChangeHandler} size="small">
-          <MenuItem value="cash">{t("Cash")}</MenuItem>
-          <MenuItem value="fiscal">{t("Fiscal")}</MenuItem>
-        </Select>
-      </div>
-      <div>
-        <NomuraAgGrid
-          rowData={data}
-          columnDefs={columnDefs}
-          rowSelection={"single"}
-          groupHeaderHeight={36}
-          headerHeight={36}
-          pagination
-          groupIncludeFooter
-          groupIncludeTotalFooter
-          onCellEditingStarted={(params) => {
-            console.log("Cell editing started:", params.column.getColId());
-          }}
-          onCellEditingStopped={(params) => {
-            console.log("Cell editing stopped:", params.column.getColId());
-          }}
-          paginationPageSize={4}
-          domLayout="autoHeight"
-          animateRows
-          overlayLoadingTemplate={Constants.loadingTemplate}
-          onCellValueChanged={onCellValueChanged}
-          onCellClicked={(params) => {
-            console.log("Cell clicked:", params.column.getColId());
-          }}
-        />
-      </div>
-    </Container>
-  );
-};
------------------------------------------------------------------------------------------------------------------------------
-----------------------------------------------------------------------------------------------------------------------------
-import React, { useState } from "react";
-import { NomuraAgGrid } from "./NomuraAgGrid";
-
-const ParentComponent = () => {
-  const [gridData, setGridData] = useState<any[]>([
-    { id: 1, name: "John", age: 28 },
-    { id: 2, name: "Jane", age: 34 },
-  ]);
-
-  const handleDataChange = (updatedData: any[]) => {
-    setGridData(updatedData);  // Update the state with the modified data
-  };
-
-  return (
-    <NomuraAgGrid
-      gridName="myGrid"
-      onDataChange={handleDataChange}  // Pass the data change handler
-      children={gridData}  // Pass the grid data as children
-    />
-  );
-};
-
-----
-import React, { useCallback, useState, useEffect } from "react";
-import { useTranslation } from "react-i18next";
-import clsx from "clsx";
-
-// materials
-import { AgGridReactProps, AgGridReact } from "ag-grid-react";
-import {
-  SideBarDef,
-  ColDef,
-  ExcelStyle,
-  StatusPanelDef,
-  FirstDataRenderedEvent,
-  GetLocaleTextParams,
-  GetContextMenuItemsParams,
-  MenuItemDef,
-  RowGroupOpenedEvent,
-  IsGroupOpenByDefaultParams,
-  CellValueChangedEvent,
-  CellClickedEvent,
-} from "ag-grid-community";
-
-// core
-import { GridFormatter as formatter } from "core/utilities/grid-formatter";
-import { ExcelExportFormatter } from "core/utilities/excel-export-formatter";
-
-// store
-import { useAppSelector, useAppDispatch } from "store/reduxHooks";
-
-// components
-import { styled } from "@mui/material";
-import { setGridState, AgGridState } from "store/userSpecificLocalSettings";
-import { cloneDeep } from "lodash";
-import { store } from "store/Store";
-import { NomuraAgGridStatusBar } from "./NomuraAgGridStatusBar/NomuraAgGridStatusBar";
-import { CustomLoadingOverlay } from "./CustomLoadingOverlay/CustomLoadingOverlay";
-
-import DateFilterPicker from "../DataGridComponent/DataFilterPicker/DataFilterPicker";
-import { LoaderWrapper } from "components";
-
-export interface NomuraAgGridProps extends AgGridReactProps {
-  reportName?: string;
-  userName?: string;
-  children?: any;
-  showClearFilterButton?: boolean;
-  rootStyleClassNames?: Record<string, any>;
-  thinGridStatusBar?: boolean;
-  disableSideBar?: boolean;
-  containerHeight?: number;
-  useViewportHeight?: boolean;
-  gridName?: string;
-  disableExcelExporting?: boolean;
-  testId?: string;
-  onCellValueChanged?: (params: CellValueChangedEvent) => void;
-  onCellClickedHandler?: (params: CellClickedEvent) => void;
-  onDataChange?: (updatedData: any[]) => void;  // Callback to handle data change
-}
-
-const AgGridRootContainer = styled("div")<ContainerProps>(/* styles as before */);
-
-/**
- * The NomuraAgGrid component with editable functionality.
- */
-export const NomuraAgGrid = React.forwardRef((props: NomuraAgGridProps, gridRef: any) => {
-  const { t } = useTranslation();
-  const [gridData, setGridData] = useState<any[]>([]); // State to hold grid data
-
-  const agGridDefaultColDef: ColDef = {
-    floatingFilter: true,
-    filter: "agMultiColumnFilter",
-    resizable: true,
-    sortable: true,
-    editable: true, // Enable editing for all columns by default
-    ...props.defaultColDef,
-  };
-
-  const sideBar: SideBarDef = {
-    // Same as before
-  };
-
-  const gridColumnTypes = {
-    dateColumn: formatter.dateColumnDefaultConfig(),
-    dateTimeColumn: formatter.dateTimeColumnDefaultConfig(),
-    ...props.columnTypes,
-  };
-
-  const defaultExcelStyles: ExcelStyle[] = [
-    ExcelExportFormatter.headerReportStyle(),
-    ExcelExportFormatter.headerRowStyle(),
-    ExcelExportFormatter.dateTypeColumnFormatting(),
-    ExcelExportFormatter.hyperlinkColumnStyle(),
-    ExcelExportFormatter.textColumnStyle(),
-    ExcelExportFormatter.currencyColumnStyle(),
-  ];
-
-  const excelStyles = props.excelStyles ? defaultExcelStyles.concat(props.excelStyles) : defaultExcelStyles;
-
-  const onCellValueChanged = (event: CellValueChangedEvent) => {
-    // Handle cell value change and update data state
-    const { oldValue, newValue, colDef, data } = event;
-    if (newValue !== oldValue) {
-      const updatedData = gridData.map((row) =>
-        row === data ? { ...row, [colDef.field]: newValue } : row
-      );
-      setGridData(updatedData); // Update the grid data in state
-      if (props.onDataChange) {
-        props.onDataChange(updatedData); // Pass the updated data to the parent component
-      }
-    }
-    // Call the parent's handler if provided
-    if (props.onCellValueChanged) {
-      props.onCellValueChanged(event);
-    }
-  };
-
-  // Function to restore saved grid state
-  const restoreSavedState = () => {
-    // Same as before
-  };
-
-  const getGridContextMenuItems = useCallback((params: GetContextMenuItemsParams): (string | MenuItemDef)[] => {
-    // Same as before
-  }, []);
-
-  // Effect to initialize grid data from props.children if available
-  useEffect(() => {
-    if (props.children) {
-      setGridData(props.children);  // Initialize gridData from passed children
-    }
-  }, [props.children]);
-
-  return (
-    <AgGridRootContainer
-      wrapperHeight={props.containerHeight}
-      thinGridStatusBar={props.thinGridStatusBar}
-      useViewportHeight={props.useViewportHeight}
-      data-testid={props.testId}
-    >
-      <div className={clsx("ag-theme-alpine", props.rootStyleClassNames)}>
-        <AgGridReact
-          {...props}
-          pagination
-          paginationAutoPageSize={props.paginationAutoPageSize}
-          animateRows
-          loadingOverlayComponent={"loaderWrapper"}
-          overlayNoRowsTemplate={t("noRows")}
-          columnTypes={gridColumnTypes}
-          defaultColDef={agGridDefaultColDef}
-          getContextMenuItems={getGridContextMenuItems}
-          components={{
-            ...props.components,
-            loaderWrapper: LoaderWrapper,
-            agDateInput: DateFilterPicker,
-            buttonStatusBar: NomuraAgGridStatusBar,
-          }}
-          excelStyles={!props.disableExcelExporting ? excelStyles : undefined}
-          defaultExcelExportParams={
-            !props.disableExcelExporting
-              ? {
-                  ...ExcelExportFormatter.defaultExcelExportParameters(
-                    props?.children,
-                    props.reportName ?? "",
-                    props.userName ?? ""
-                  ),
-                  ...props.defaultExcelExportParams,
-                }
-              : undefined
-          }
-          enableCharts
-          enableRangeSelection
-          sideBar={props.disableSideBar ? undefined : sideBar}
-          statusBar={{ statusPanels: props.statusBar?.statusPanels || [] }}
-          ref={gridRef}
-          onSortChanged={onSaveGridColumnState}
-          onFirstDataRendered={firstDataRenderedHandler}
-          onFilterChanged={filterChangedHandler}
-          onColumnVisible={onSaveGridColumnState}
-          onColumnPinned={onSaveGridColumnState}
-          onColumnResized={onSaveGridColumnState}
-          onDragStopped={onSaveGridColumnState}
-          onColumnValueChanged={onSaveGridColumnState}
-          onColumnPivotChanged={onSaveGridColumnState}
-          onCellValueChanged={onCellValueChanged} // Handle cell value change
-          suppressColumnVirtualisation // Performance optimization for horizontal scroll
-        >
-          {props.children}
-        </AgGridReact>
-      </div>
-    </AgGridRootContainer>
-  );
-});
----------------------------------------------------------------------------------------------------------------------------------
-//react
-import React, { useCallback, useState } from "react";
-import { useTranslation } from "react-i18next";
-import clsx from "clsx";
-
-//materials
-import { AgGridReactProps, AgGridReact } from "ag-grid-react";
-import {
-  SideBarDef,
-  ColDef,
-  ExcelStyle,
-  StatusPanelDef,
-  FirstDataRenderedEvent,
-  GetLocaleTextParams,
-  GetContextMenuItemsParams,
-  MenuItemDef,
-  RowGroupOpenedEvent,
-  IsGroupOpenByDefaultParams,
-  CellValueChangedEvent,
-  CellClickedEvent,
-} from "ag-grid-community";
-
-//core
-import { GridFormatter as formatter } from "core/utilities/grid-formatter";
-import { ExcelExportFormatter } from "core/utilities/excel-export-formatter";
-
-//store
-import { useAppSelector, useAppDispatch } from "store/reduxHooks";
-
-//components
-// import DateFilterPicker from "../date-filter-picker/DateFilterPicker";
-// import { CustomLoadingOverlay } from "..";
-// import { NomuraAgGridStatusBar } from "../NomuraAgGridStatusBar/NomuraAgGridStatusBar";
-
-import { styled } from "@mui/material";
-import { setGridState, AgGridState } from "store/userSpecificLocalSettings";
-import { cloneDeep } from "lodash";
-import { store } from "store/Store";
-import { NomuraAgGridStatusBar } from "./NomuraAgGridStatusBar/NomuraAgGridStatusBar";
-import { CustomLoadingOverlay } from "./CustomLoadingOverlay/CustomLoadingOverlay";
-
-import DateFilterPicker from "../DataGridComponent/DataFilterPicker/DataFilterPicker";
-import { LoaderWrapper } from "components";
-
-export interface NomuraAgGridProps extends AgGridReactProps {
-  reportName?: string;
-  userName?: string;
-  children?: any;
-  showClearFilterButton?: boolean;
-  /**
-   * Class name to be applied to root div element.
-   * By default ag-theme-alpine is always applied
-   * Any other class name to be applied, should be provided.
-   * If multiple classes are required, use clsx and pass
-   */
-  rootStyleClassNames?: Record<string, any>; //string | null;
-  thinGridStatusBar?: boolean;
-  disableSideBar?: boolean;
-  containerHeight?: number;
-  useViewportHeight?: boolean;
-  gridName?: string;
-  disableExcelExporting?: boolean;
-  testId?: string;
-  onCellValueChanged?: (params: CellValueChangedEvent) => void;
-  onCellClickedHandler?: (params: CellClickedEvent) => void;
-  onCellEditingStarted?: (params: CellClickedEvent) => void;
-  onCellEditingStopped?: (params: CellClickedEvent) => void;
-  onDataChange?: (updatedData: any[]) => void;  
-}
-
-type ContainerProps = {
-  wrapperHeight?: number;
-  thinGridStatusBar?: boolean;
-  useViewportHeight?: boolean;
-};
-
-type GridExtendSettings = Array<string>;
-
-type StringOrNull = string | null | undefined;
-
-const AgGridRootContainer = styled("div")<ContainerProps>(
-  ({ wrapperHeight, thinGridStatusBar, useViewportHeight }) => ({
-    height: "100% !important",
-    display: "grid",
-    gridTemplateRows: "1fr",
-    "& .ag-status-bar": {
-      position: "absolute",
-      bottom: 2,
-      border: "none",
-    },
-    "& .ag-layout-auto-height": {
-      height: "100% !important",
-    },
-    "& .ag-status-panel": {
-      padding: "0 !important",
-      display: "flex",
-      alignItems: "center",
-      marginRight: "18px !important",
-    },
-    "& .ag-paging-page-summary-panel": {
-      margin: "1px !important",
-    },
-    "& .ag-root-wrapper": {
-      height: wrapperHeight ? `${wrapperHeight}${useViewportHeight ? "vh" : "%"} !important` : "100% !important",
-    },
-    ...(thinGridStatusBar && {
-      "& .ag-row": {
-        fontSize: "12px !important",
-        "& .MuiButtonBase-root": {
-          margin: 0,
-          padding: "6px !important",
-        },
-        "& .material-icons": {
-          fontSize: "1rem !important",
-          marginBottom: "5px !important",
-        },
-      },
-      "& .ag-paging-panel": {
-        height: "32px !important",
-      },
-      "& .ag-theme-alpine .ag-status-bar": {
-        borderTop: "none",
-        height: "32px !important",
-      },
-      "& .MuiButtonBase-root": {
-        padding: "8px !important",
-      },
-    }),
-  })
-);
-
-/**
- * This grid defines all the common configurations like excel export, filters, sidebar, default col def, col types.
- * Consumer grid don"t need to specify these configurations however same configurations can be overridden or additional configuration can be added via normal ag grid props.
- * The specific properties and events should be handled by consumer grid like providing data, handling click or grid ready events etc.
- * @param props Ag grid properties which are not specified in parent grid.
- *
- */
-export const NomuraAgGrid = React.forwardRef((props: NomuraAgGridProps, gridRef: any) => {
-  const { t } = useTranslation();
-
-  const [gridData, setGridData] = useState<any[]>([]);
-  const agGridDefaultColDef: ColDef = {
-    floatingFilter: true,
-    filter: "agMultiColumnFilter",
-    resizable: true,
-    sortable: true,
-    // editable: true,
-    ...props.defaultColDef,
-  };
-
-  const onCellValueChanged = (event: CellValueChangedEvent) => {
-    // Handle cell value change and update data state
-    const { oldValue, newValue, colDef, data } = event;
-    if (newValue !== oldValue) {
-      const updatedData = gridData.map((row:any) =>
-        row === data ? { ...row, [colDef.field]: newValue } : row
-      );
-      setGridData(updatedData); // Update the grid data in state
-      if (props.onDataChange) {
-        props.onDataChange(updatedData); // Pass the updated data to the parent component
-      }
-    }
-    // Call the parent's handler if provided
-    if (props.onCellValueChanged) {
-      props.onCellValueChanged(event);
-    }
-  };
-
-  // const onCellClickedHandler = (params: CellClickedEvent) => {
-  //   console.log("Cell clicked:", params.column.getColId());
-  //   // console.log('Is cell editable:', params.column.isEditable());
-  // };
-  // const onCellEditingStarted = (params: CellClickedEvent) => {
-  //   console.log("Cell clicked:", params);
-  //   // console.log('Is cell editable:', params.column.isEditable());
-  // };
-
-  const sideBar: SideBarDef = {
-    toolPanels: [
-      {
-        id: "columns",
-        labelDefault: "Columns",
-        labelKey: "columns",
-        iconKey: "columns",
-        toolPanel: "agColumnsToolPanel",
-        minWidth: 225,
-        maxWidth: 225,
-        width: 225,
-      },
-      {
-        id: "filters",
-        labelDefault: "Filters",
-        labelKey: "filters",
-        iconKey: "filter",
-        toolPanel: "agFiltersToolPanel",
-        minWidth: 180,
-        maxWidth: 400,
-        width: 250,
-      },
-    ],
-  };
-
-  const gridColumnTypes = {
-    dateColumn: formatter.dateColumnDefaultConfig(),
-    dateTimeColumn: formatter.dateTimeColumnDefaultConfig(),
-    ...props.columnTypes,
-  };
-
-  const defaultExcelStyles: ExcelStyle[] = [
-    ExcelExportFormatter.headerReportStyle(),
-    ExcelExportFormatter.headerRowStyle(),
-    ExcelExportFormatter.dateTypeColumnFormatting(),
-    ExcelExportFormatter.hyperlinkColumnStyle(),
-    ExcelExportFormatter.textColumnStyle(),
-    ExcelExportFormatter.currencyColumnStyle(),
-  ];
-
-  const excelStyles = props.excelStyles ? defaultExcelStyles.concat(props.excelStyles) : defaultExcelStyles;
-
-  const excelExportProcessCellCallBackHandler = (params: any) => {
-    if (props.defaultExcelExportParams?.processCellCallback) {
-      return props.defaultExcelExportParams.processCellCallback(params);
-    }
-
-    return null;
-  };
-
-  const resetColumnOrderHandler = () => {
-    if (gridRef && gridRef.current) {
-      gridRef.current.columnApi.resetColumnState();
-    }
-  };
-
-  const defaultStatusPanels: StatusPanelDef[] = [
-    {
-      statusPanel: "buttonStatusBar",
-      statusPanelParams: {
-        onExcelExportProcessCellCallBack: !props.disableExcelExporting
-          ? excelExportProcessCellCallBackHandler
-          : undefined,
-        showClearFilterButton: props.showClearFilterButton ?? true,
-        hideExcelExportButton: props.disableExcelExporting ? true : false,
-        handleResetColumnOrder: resetColumnOrderHandler,
-      },
-    },
-    { statusPanel: "agTotalRowCountComponent", align: "right" },
-  ];
-
-  const statusPanels: StatusPanelDef[] = props.statusBar?.statusPanels
-    ? [...defaultStatusPanels, ...props.statusBar.statusPanels]
-    : defaultStatusPanels;
+  const { data } = props;
+  console.log(props, "ViewWorkstreamDialog");
+  const defaultWorkstreamDetails = {} as WorkstreamDetails;
+  const dispatch = useDispatch();
 
   const currentUser = useAppSelector((state) => state.loggedInUser.currentUser);
-  const dispatch = useAppDispatch();
 
-  const onSaveGridColumnState = () => {
-    if (!props.gridName) {
-      return;
-    }
-    if (gridRef && gridRef.current && gridRef.current && gridRef.current.columnApi) {
-      //This is done to avoid re-render of grid on dispatching action.
-      //Re-rendering is causing saving columns state unstable.
-      const prevState = cloneDeep(store.getState().userSpecificLocalState.agGridStates);
+  const [tabActive, setTabActive] = useState<ViewWorkstreamType>(ViewWorkstreamType.keyInformation);
+  const [workstreamDetails, setWorkstreamDetails] = useState<WorkstreamDetails>(defaultWorkstreamDetails);
+  const [workstreamEdit, setWorkstreamEdit] = useState<WorkstreamEdit>();
+  const [loading, setLoading] = useState<boolean>(false);
+  const [saving, setSaving] = useState<boolean>(false);
 
-      const prevGridState = prevState.find((state: AgGridState) => state.gridName === props.gridName);
+  // const pmtNonFinRole = currentUser.currentRole.roleId === Constants.PmtPortfolioNonFin;
 
-      const colState = gridRef.current.columnApi.getColumnState();
-      const colGroupState = gridRef.current.columnApi.getColumnGroupState();
-      if (prevGridState) {
-        prevGridState.columnState = colState;
-        prevGridState.columnGroupState = colGroupState;
-      } else {
-        prevState.push({ columnState: colState, columnGroupState: colGroupState, gridName: props.gridName });
-      }
+  const workstreamForm = useForm<any>({
+    defaultValues: {},
+    resolver: workstreamResolver() as Resolver<WorkstreamEdit>,
+    shouldFocusError: true,
+    mode: "all",
+  });
 
-      dispatch(setGridState(prevState));
-    }
+  const { handleSubmit } = workstreamForm;
+
+  const onViewWorkstreamTabChange = (event: SyntheticEvent, value: ViewWorkstreamType) => {
+    setTabActive(value);
   };
 
-  const firstDataRenderedHandler = (event: FirstDataRenderedEvent) => {
-    if (props.onFirstDataRendered) {
-      props.onFirstDataRendered(event);
-    }
-    if (!props.gridName) {
-      return;
-    }
-
-    restoreSavedState();
+  const isUserHavPermissionApprovalStatus = (users: Array<string>, currentLdapId: string): boolean => {
+    return users.findIndex((permissionLdapId) => permissionLdapId === currentLdapId) > -1;
   };
 
-  const restoreSavedState = () => {
-    if (gridRef && gridRef.current && gridRef.current) {
-      //This is done to avoid re-render of grid on dispatching action.
-      //Re-rendering is causing saving columns state unstable.
-      const agGridState = store.getState().userSpecificLocalState.agGridStates;
-      const savedState = agGridState.find((state: AgGridState) => state.gridName === props.gridName);
-      if (savedState) {
-        if (gridRef.current.columnApi) {
-          gridRef.current.columnApi.applyColumnState({
-            state: savedState.columnState,
-            applyOrder: true,
-          });
-          if (savedState.columnGroupState) {
-            gridRef.current.columnApi.setColumnGroupState(savedState.columnGroupState);
-          }
-        }
-        if (gridRef.current.api) {
-          if (savedState.filterModel) {
-            gridRef.current.api.setFilterModel(savedState.filterModel);
-          }
-        }
-      }
-    }
+  const getKeyInformationDetails = (response: Array<any>): WorkstreamDataCollection => {
+    const budAttribs = response[DataType.BudAttributeMasterData];
+    const approvalStatusUsersAttribs = filteredAttribsByLookupType(
+      budAttribs,
+      AttribMasterConstants.lookupTypeInvSpendUsers
+    );
+    const permUserLdaps: string[] = approvalStatusUsersAttribs
+      ? approvalStatusUsersAttribs.map((item) => item.returnValue1)
+      : [];
+    return {
+      programs: response[DataType.Programs],
+      subPrograms: response[DataType.SubProgram],
+      classifications: filteredAttribsByLookupType(budAttribs, AttribMasterConstants.lookupTypeClassification),
+      subClassifications: filteredAttribsByLookupType(budAttribs, AttribMasterConstants.lookupTypeSubClassification),
+      leadRegions: response[DataType.LeadRegion],
+      deliveryFunctions: response[DataType.DeliveryFunction],
+      statuses: getDropdownMappedItems(budAttribs, AttribMasterConstants.lookupTypeTypeStatus),
+      isUserHavPermissionApprovalStatus: isUserHavPermissionApprovalStatus(permUserLdaps, currentUser.ldapId),
+      approvalStatuses: getDropdownMappedItems(budAttribs, AttribMasterConstants.lookupTypeTypeApprovalStatus),
+      priorityTypes: getDropdownMappedItems(budAttribs, AttribMasterConstants.lookupTypeTypePriority),
+      invGovernanceRegions: getDropdownMappedItems(budAttribs, AttribMasterConstants.lookupTypeInvGovernanceRegion),
+      crossFuncInitiatives: getDropdownMappedItems(budAttribs, AttribMasterConstants.lookupTypeCrossInitiativeFuncs),
+    };
   };
 
-  const filterChangedHandler = (params: any) => {
-    if (props.onFilterChanged) {
-      props.onFilterChanged(params);
-    }
-    if (!props.gridName) {
-      return;
-    }
-    //This is done to avoid re-render of grid on dispatching action.
-    //Re-rendering is causing saving columns state unstable.
-    const agGridState = store.getState().userSpecificLocalState.agGridStates;
-    const filterModel = params.api.getFilterModel();
-    const prevState = cloneDeep(agGridState);
-    const prevGridState = prevState.find((state: any) => state.gridName === props.gridName);
-    if (prevGridState) {
-      prevGridState.filterModel = filterModel;
-    } else {
-      prevState.push({ filterModel: filterModel, gridName: props.gridName });
+  const initData = (response: any) => {
+    console.log(response[0], "initData");
+    const workstream = response[DataType.Workstream];
+    const details = {
+      dataCollection: getKeyInformationDetails(response),
+      cost: workstream[0]?.cost,
+      benefits: workstream[0]?.benefit,
+      defendCategorization: workstream[0]?.defendCategorization,
+      keyInformation: workstream[0]?.keyInformation,
+    };
+
+    const editData = { ...workstream[0].keyInformation, ...workstream[0].defendCategorization };
+    setWorkstreamEdit(editData);
+    Object.keys(editData).forEach((key: any) => {
+      workstreamForm.setValue(key, editData[key], { shouldDirty: false });
+    });
+
+    if (workstreamForm.getValues("classification") !== "Defend") {
+      workstreamForm.setValue("isHighIARcsa", null);
+      workstreamForm.setValue("isMktIndustryRequirement", null);
+      workstreamForm.setValue("regulationNameAuditPoint", null);
     }
 
-    dispatch(setGridState(prevState));
+    workstreamForm.trigger();
+    console.log(details.cost, "details");
+
+    setWorkstreamDetails(details);
   };
 
-  const getLocaleText = (params: GetLocaleTextParams) => {
-    if (params.key === "totalRows") {
-      return t("rows");
+  useEffect(() => {
+    if (data.id) {
+      setLoading(true);
+      Promise.all([
+        WorkStreamService.getWorkStreamDetailsByID(data.id, Constants.previousYearsCount),
+        ProgramService.get(),
+        SubProgramService.get(),
+        RegionMappingService.get(),
+        BusinessDivisionService.getAllBusinessDivisionsData(),
+        WorkStreamService.getWorkStreamAttributeList(),
+      ] as any)
+        .then((responses) => {
+          const data = responses.map((response: any) => response.data);
+          initData(data);
+        })
+        .catch((error) => {
+          console.error(error);
+        })
+        .finally(() => {
+          setLoading(false);
+        });
     }
-    return params.defaultValue;
+  }, [data.id]);
+
+  const onSubmit: SubmitHandler<any> = (data) => {
+    console.log("onSubmit");
+    setSaving(true);
+    console.log(data, "onSubmit");
   };
 
-  const getGridContextMenuItems = useCallback((params: GetContextMenuItemsParams): (string | MenuItemDef)[] => {
-    if (props.getContextMenuItems) {
-      return props.getContextMenuItems(params);
-    } else {
-      let result: (string | MenuItemDef)[] = [];
-      if (props.disableExcelExporting) {
-        if (params.defaultItems) {
-          result = params.defaultItems.filter((item) => !item.toLowerCase().includes("export"));
-        }
-      } else {
-        if (params.defaultItems) {
-          result = [...params.defaultItems];
-        }
-      }
-      return result;
-    }
-  }, []);
+  const onCancelClickHandler = () => {
+    workstreamForm.reset(workstreamEdit);
+    props.onCancelClick();
+  };
+  const hasDefendTabErrors = hasDefendValidationErrors(workstreamForm.formState);
+  const hasKeyInformationErrors = hasKeyInformationValidationErrors(workstreamForm.formState);
+
+  console.log(workstreamDetails, "workstreamDetails");
+
+  console.log(workstreamForm.formState, "workstreamForm");
+
+  const currentFormState = workstreamForm.getValues();
+  console.log(currentFormState,"currentFormState");
 
   return (
-    <AgGridRootContainer
-      wrapperHeight={props.containerHeight}
-      thinGridStatusBar={props.thinGridStatusBar}
-      useViewportHeight={props.useViewportHeight}
-      data-testid={props.testId}
+    <NomuraBigSizeDialog
+      testId="workstreamEditDialog"
+      dialogTitle={data.name}
+      actionHide
+      maxWidth={"xl"}
+      open={props.show}
+      onCancel={props.onCancelClick}
     >
-      <div className={clsx("ag-theme-alpine", props.rootStyleClassNames)}>
-        <AgGridReact
-          {...props}
-          pagination
-          paginationAutoPageSize={props.paginationAutoPageSize}
-          animateRows
-          loadingOverlayComponent={"loaderWrapper"}
-          overlayNoRowsTemplate={t("noRows")}
-          columnTypes={gridColumnTypes}
-          defaultColDef={agGridDefaultColDef}
-          // onCellClicked={onCellClickedHandler}
-          getContextMenuItems={getGridContextMenuItems}
-          onCellValueChanged={onCellValueChanged}
-          components={{
-            ...props.components,
-            loaderWrapper: LoaderWrapper,
-            agDateInput: DateFilterPicker,
-            buttonStatusBar: NomuraAgGridStatusBar,
-          }}
-          excelStyles={!props.disableExcelExporting ? excelStyles : undefined}
-          defaultExcelExportParams={
-            !props.disableExcelExporting
-              ? {
-                  ...ExcelExportFormatter.defaultExcelExportParameters(
-                    props?.children,
-                    props.reportName ?? "",
-                    currentUser.name
-                  ),
-                  ...props.defaultExcelExportParams,
-                }
-              : undefined
-          }
-          enableCharts
-          enableRangeSelection
-          sideBar={props.disableSideBar ? undefined : sideBar}
-          statusBar={{ statusPanels: statusPanels }}
-          ref={gridRef}
-          onSortChanged={onSaveGridColumnState}
-          onFirstDataRendered={firstDataRenderedHandler}
-          onFilterChanged={filterChangedHandler}
-          onColumnVisible={onSaveGridColumnState}
-          onColumnPinned={onSaveGridColumnState}
-          onColumnResized={onSaveGridColumnState}
-          onDragStopped={onSaveGridColumnState}
-          onColumnValueChanged={onSaveGridColumnState}
-          onColumnPivotChanged={onSaveGridColumnState}
-          // onCellEditingStarted={onCellEditingStarted}
-          // onCellEditingStopped={(event) => {
-          //   console.log("Cell editing stopped", event);
-          //   // Your custom logic here
-          // }}
-          isGroupOpenByDefault={(e: IsGroupOpenByDefaultParams) => {
-            if (props.gridName) {
-              const gridExtendSettingsJson: StringOrNull = sessionStorage.getItem(props.gridName);
-              const array: GridExtendSettings = gridExtendSettingsJson ? JSON.parse(gridExtendSettingsJson) : [];
-              const key = array.find((x) => x === e.key);
-              return key !== undefined;
-            }
-
-            return false;
-          }}
-          // onRowGroupOpened={(e: RowGroupOpenedEvent) => {
-          //   if (props.gridName) {
-          //     const key: StringOrNull = e.node.key;
-          //     const gridExtendSettingsJson: StringOrNull = sessionStorage.getItem(props.gridName);
-          //     const array: GridExtendSettings = gridExtendSettingsJson ? JSON.parse(gridExtendSettingsJson) : [];
-          //     const index: number = array.findIndex((x) => x === key);
-          //     if (e.expanded) {
-          //       if (index === -1) {
-          //         array.push(key as string);
-          //       }
-          //     } else {
-          //       array.splice(index, 1);
-          //     }
-          //     sessionStorage.setItem(props.gridName, JSON.stringify(array));
-          //   }
-          // }}
-          getLocaleText={getLocaleText}
-          suppressColumnVirtualisation // Performance optimization for horizontal scroll
-        >
-          {props.children}
-        </AgGridReact>
-      </div>
-    </AgGridRootContainer>
+      {!loading && (
+      <form noValidate onSubmit={handleSubmit(onSubmit)}>
+          <Grid container spacing={1}>
+            <Grid item md={12}>
+              <Box>
+                <Tabs
+                  indicatorColor="primary"
+                  textColor="primary"
+                  value={tabActive}
+                  onChange={onViewWorkstreamTabChange}
+                >
+                  <TabWithErrorMark
+                    value={ViewWorkstreamType.keyInformation}
+                    label={t("keyInformation")}
+                    disabled={saving}
+                    // hasErrors={hasKeyInformationErrors}
+                  />
+                  <Tab value={ViewWorkstreamType.cost} label={t("workstreamCost")} disabled={saving} />
+                  <Tab value={ViewWorkstreamType.benefit} label={t("workstreamBenefit")} disabled={saving} />
+                  <TabWithErrorMark
+                    value={ViewWorkstreamType.defendCategorization}
+                    label={t("defendCategorization")}
+                    disabled={saving}
+                    // hasErrors={hasDefendTabErrors}
+                  />
+                </Tabs>
+              </Box>
+              <TabPanel value={ViewWorkstreamType.keyInformation} index={tabActive} renderContentInAdvance>
+                <KeyInformation form={workstreamForm} data={workstreamDetails.dataCollection} disabled={saving} />
+              </TabPanel>
+              <TabPanel value={ViewWorkstreamType.cost} index={tabActive}>
+                <WorkstreamCostGrid data={workstreamDetails.cost} />
+              </TabPanel>
+              <TabPanel value={ViewWorkstreamType.benefit} index={tabActive}>
+                <WorkstreamBenefits data={workstreamDetails.benefits} />
+              </TabPanel>
+              <TabPanel value={ViewWorkstreamType.defendCategorization} index={tabActive} renderContentInAdvance>
+                <DefendCategorization form={workstreamForm} data={workstreamDetails.dataCollection} disabled={saving} />
+              </TabPanel>
+            </Grid>
+            <Grid
+              container
+              item
+              md={12}
+              alignItems="center"
+              justifyContent="flex-end"
+              spacing={2}
+              sx={{ marginTop: "30px !important" }}
+            >
+              <Grid item>
+                <NomuraButton type="submit" loading={saving} startIcon={<Save />} disabled={saving}>
+                  {t("save")}
+                </NomuraButton>
+              </Grid>
+              <Grid item>
+                <NomuraButton color="secondary" startIcon={<Cancel />} onClick={onCancelClickHandler} disabled={saving}>
+                  {t("cancel")}
+                </NomuraButton>
+              </Grid>
+            </Grid>
+          </Grid>
+        </form>
+      )}
+      {loading && (
+        <Loading>
+          <CircularProgress color="primary" />
+        </Loading>
+      )}
+    </NomuraBigSizeDialog>
   );
-});
-A computed property name must be of type 'string', 'number', 'symbol', or 'any'.ts(
----------------------------------------------------------------------------
-const onCellValueChanged = (event: CellValueChangedEvent) => {
-  const { oldValue, newValue, colDef, data } = event;
-  if (newValue !== oldValue) {
-    const updatedData = gridData.map((row) => 
-      row === data ? { ...row, [colDef.field]: newValue } : row
-    );
-    setGridData(updatedData); // Update the grid data in state
-    if (props.onDataChange) {
-      props.onDataChange(updatedData); // Pass the updated data to the parent component
-    }
-  }
-  if (props.onCellValueChanged) {
-    props.onCellValueChanged(event); // Pass the change to the parent if needed
-  }
 };
+function hasDefendValidationErrors(formState: FormState<WorkstreamEdit>) {
+  return (
+    !formState.isValid &&
+    (formState.errors.hasOwnProperty(nameof<WorkstreamEdit>((x) => x.isHighIARcsa)) ||
+      formState.errors.hasOwnProperty(nameof<WorkstreamEdit>((x) => x.isMktIndustryRequirement)) ||
+      formState.errors.hasOwnProperty(nameof<WorkstreamEdit>((x) => x.regulationNameAuditPoint)) ||
+      formState.errors.hasOwnProperty(nameof<WorkstreamEdit>((x) => x.isRegulatoryRequirement)))
+  );
+}
 
+function hasKeyInformationValidationErrors(formState: FormState<WorkstreamEdit>) {
+  return (
+    !formState.isValid &&
+    (formState.errors.hasOwnProperty(nameof<WorkstreamEdit>((x) => x.name)) ||
+      formState.errors.hasOwnProperty(nameof<WorkstreamEdit>((x) => x.programId)) ||
+      formState.errors.hasOwnProperty(nameof<WorkstreamEdit>((x) => x.subProgramId)) ||
+      formState.errors.hasOwnProperty(nameof<WorkstreamEdit>((x) => x.workStreamManager)) ||
+      formState.errors.hasOwnProperty(nameof<WorkstreamEdit>((x) => x.businessSponsor)) ||
+      formState.errors.hasOwnProperty(nameof<WorkstreamEdit>((x) => x.classification)) ||
+      formState.errors.hasOwnProperty(nameof<WorkstreamEdit>((x) => x.subClassification)) ||
+      formState.errors.hasOwnProperty(nameof<WorkstreamEdit>((x) => x.deliveryRegion)) ||
+      formState.errors.hasOwnProperty(nameof<WorkstreamEdit>((x) => x.deliveryFunction)) ||
+      formState.errors.hasOwnProperty(nameof<WorkstreamEdit>((x) => x.workstreamStatus)) ||
+      formState.errors.hasOwnProperty(nameof<WorkstreamEdit>((x) => x.workstreamApprovalStatus)) ||
+      formState.errors.hasOwnProperty(nameof<WorkstreamEdit>((x) => x.startDate)) ||
+      formState.errors.hasOwnProperty(nameof<WorkstreamEdit>((x) => x.endDate)) ||
+      formState.errors.hasOwnProperty(nameof<WorkstreamEdit>((x) => x.tags)) ||
+      formState.errors.hasOwnProperty(nameof<WorkstreamEdit>((x) => x.description)) ||
+      formState.errors.hasOwnProperty(nameof<WorkstreamEdit>((x) => x.typePriority)) ||
+      formState.errors.hasOwnProperty(nameof<WorkstreamEdit>((x) => x.investmentGovernanceRegion)) ||
+      formState.errors.hasOwnProperty(nameof<WorkstreamEdit>((x) => x.crossFunctionalInitiative)))
+  );
+}
 
+function getDropdownMappedItems(budAttribs: RefDataBudAttribMaster[], lookupType: string) {
+  const attribItems = filteredAttribsByLookupType(budAttribs, lookupType);
+  let mappedStatusDropdown: SelectItem[] = [];
+  if (attribItems) {
+    mappedStatusDropdown = attribItems.map((item: RefDataBudAttribMaster) => {
+      return { key: item.returnValue1, value: item.returnValue1, text: item.returnValue1 };
+    });
+  }
+  return mappedStatusDropdown;
+}
+function filteredAttribsByLookupType(budAttribs: RefDataBudAttribMaster[], lookupType: string) {
+  return budAttribs.filter((item: RefDataBudAttribMaster) => item.lookUpKey1 === lookupType) ?? [];
+}
